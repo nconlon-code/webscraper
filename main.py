@@ -1,5 +1,5 @@
 import sys
-from crawl import get_html
+from crawl import crawl_page
 
 def main():
     if len(sys.argv) < 2:
@@ -9,7 +9,10 @@ def main():
         print("too many arguments provided")
         sys.exit(1)
     print(f"starting crawl of: {sys.argv[1]}")
-    print(get_html(sys.argv[1]))
+    page_data = crawl_page(sys.argv[1])
+    print(f"Found {len(page_data)} pages:")
+    for page in page_data.values():
+        print(f"- {page['url']}: {len(page['outgoing_links'])} outgoing links")
 
 if __name__ == "__main__":
     main()

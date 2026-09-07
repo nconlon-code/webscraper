@@ -1,6 +1,7 @@
 from urllib.parse import (
     urlsplit,
     urljoin,
+    urlparse,
 )
 from bs4 import BeautifulSoup, Tag
 from typing import TypedDict
@@ -74,3 +75,20 @@ def get_html(url):
         raise Exception(f"Expected content-type text/html, but received {content_type}")
     
     return response.text
+
+def crawl_page(base_url, current_url=None, page_data=None):
+    if current_url is None:
+        current_url = base_url
+    if page_data is None:
+        page_data = {}
+    if urlparse(base_url).netloc != urlparse(current_url).netloc:
+        return page_data
+    current_normalized = normalize_url(current_url)
+    if current_normalized in page_data:
+        return page_data
+    html = get_html(current_url)
+    print(f"getting html from: {current_normalized}")
+    page_data[current_normalized] = (extract_page_data(html, current_url))
+    for url in get_urls_from_html(html, base_url):
+        page_data = crawl_page(base_url, url, page_data)
+    return page_data
