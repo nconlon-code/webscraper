@@ -6,6 +6,8 @@ from urllib.parse import (
 from bs4 import BeautifulSoup, Tag
 from typing import TypedDict
 import requests
+import asyncio
+import aiohttp
 
 class PageData(TypedDict):
     url: str
@@ -13,6 +15,71 @@ class PageData(TypedDict):
     first_paragraph: str
     outgoing_links: list[str]
     image_urls: list[str]
+
+class AsyncCrawler:
+    def __init__(self, base_url):
+        self.base_url = base_url
+        self.base_domain = urlsplit(base_url).netloc
+        self.page_data = {}
+        self.lock = asyncio.Lock()
+        self.max_concurrency = 3
+        self.semaphore = asyncio.Semaphore(self.max_concurrency)
+        self.session = None
+
+    async def __aenter__(self):
+        self.session = aiohttp.ClientSession()
+        return self
+
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.session.close()
+
+    async def add_page_visit(self, normalized_url):
+        async with self.lock:
+            return normalized_url not in self.page_data
+
+    async def get_html(self, url):
+        try:
+            async with self.session.get(url, headers={"User-Agent": "BootCrawler/1.0"}) as response:
+                if response.status > 399:
+                    print(f"Request failed with status code {response.status}: {response.reason}")
+                    return None
+                content_type = response.headers.get("content-type", "")
+                if "text/html" not in content_type:
+                    print(f"Expected content-type text/html, but received {content_type}")
+                    return None
+                return await response.text()
+        except Exception as e:
+            print(f"network error: {e}")
+            return None
+
+    async def crawl_page(self, current_url: str):
+        if urlparse(current_url).netloc != self.base_domain:
+            return
+        current_normalized = normalize_url(current_url)
+        if not await self.add_page_visit(current_normalized):
+            return
+        async with self.semaphore:
+            html = await self.get_html(current_url)
+            if html is None:
+                return 
+            print(f"getting html from: {current_normalized}")
+            async with self.lock:
+                self.page_data[current_normalized] = (extract_page_data(html, current_url))
+            next_urls = get_urls_from_html(html, self.base_url)
+        tasks = []
+        for url in next_urls:
+            tasks.append(asyncio.create_task(self.crawl_page(url)))
+        if tasks:
+            await asyncio.gather(*tasks)
+
+    async def crawl(self):
+        await self.crawl_page(self.base_url)
+        return self.page_data
+
+async def crawl_site_async(base_url: str):
+    async with AsyncCrawler(base_url) as crawler:
+        return await crawler.crawl()
 
 
 def normalize_url(url):
@@ -60,35 +127,3 @@ def extract_page_data(html: str, page_url: str) -> PageData:
         "outgoing_links": get_urls_from_html(html, page_url),
         "image_urls": get_images_from_html(html, page_url),
     }
-
-def get_html(url):
-    try:
-        response = requests.get(url, headers={"User-Agent": "BootCrawler/1.0"})
-    except Exception as e:
-            raise Exception(f"network error: {e}")
-    
-    if response.status_code > 399:
-        raise Exception(f"Request failed with status code {response.status_code}: {response.reason}")
-
-    content_type = response.headers.get("content-type", "")
-    if "text/html" not in content_type:
-        raise Exception(f"Expected content-type text/html, but received {content_type}")
-    
-    return response.text
-
-def crawl_page(base_url, current_url=None, page_data=None):
-    if current_url is None:
-        current_url = base_url
-    if page_data is None:
-        page_data = {}
-    if urlparse(base_url).netloc != urlparse(current_url).netloc:
-        return page_data
-    current_normalized = normalize_url(current_url)
-    if current_normalized in page_data:
-        return page_data
-    html = get_html(current_url)
-    print(f"getting html from: {current_normalized}")
-    page_data[current_normalized] = (extract_page_data(html, current_url))
-    for url in get_urls_from_html(html, base_url):
-        page_data = crawl_page(base_url, url, page_data)
-    return page_data
